@@ -1,11 +1,11 @@
 import { Router } from "express";
 import { db, scansTable, findingsTable } from "../db.js";
 import { eq, desc, avg, count, sql } from "drizzle-orm";
-import { GoogleGenAI } from "@google/genai";
 import { z } from "zod";
+import Groq from "groq-sdk";
 
 const router = Router();
-const ai = new GoogleGenAI({ apiKey: process.env.GEMINI_API_KEY! });
+const groq = new Groq({ apiKey: process.env.GROQ_API_KEY! });
 
 async function runScanAnalysis(scanId: number, url: string) {
   try {
@@ -31,12 +31,14 @@ Provide a comprehensive compliance report in valid JSON format with this exact s
 
 Provide 6-12 findings total. Return ONLY valid JSON, no markdown.`;
 
-    const response = await ai.models.generateContent({
-      model: "gemini-2.0-flash",
-      contents: [{ role: "user", parts: [{ text: prompt }] }],
+    const response = await groq.chat.completions.create({
+      model: "llama-3.3-70b-versatile",
+      messages: [{ role: "user", content: prompt }],
+      temperature: 0.7,
+      max_tokens: 4096,
     });
 
-    const rawText = response.text ?? "{}";
+    const rawText = response.choices[0]?.message?.content ?? "{}";
     const cleaned = rawText.replace(/```json|```/g, "").trim();
 
     let parsed: any;
@@ -88,13 +90,11 @@ Provide 6-12 findings total. Return ONLY valid JSON, no markdown.`;
   }
 }
 
-// GET /api/scans
 router.get("/scans", async (req, res) => {
   const scans = await db.select().from(scansTable).orderBy(desc(scansTable.createdAt));
   res.json(scans);
 });
 
-// POST /api/scans
 router.post("/scans", async (req, res) => {
   const schema = z.object({ url: z.string().min(1) });
   const parsed = schema.safeParse(req.body);
@@ -118,7 +118,6 @@ router.post("/scans", async (req, res) => {
   setImmediate(() => runScanAnalysis(scan.id, url));
 });
 
-// GET /api/scans/summary
 router.get("/scans/summary", async (req, res) => {
   const [stats] = await db.select({
     totalScans: count(),
@@ -142,7 +141,6 @@ router.get("/scans/summary", async (req, res) => {
   });
 });
 
-// GET /api/scans/:id
 router.get("/scans/:id", async (req, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
@@ -154,7 +152,6 @@ router.get("/scans/:id", async (req, res) => {
   res.json({ ...scan, findings });
 });
 
-// DELETE /api/scans/:id
 router.delete("/scans/:id", async (req, res) => {
   const id = parseInt(req.params.id);
   if (isNaN(id)) { res.status(400).json({ error: "Invalid ID" }); return; }
